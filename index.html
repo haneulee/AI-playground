@@ -75,7 +75,16 @@
     <script>
       const imageInput = document.getElementById("imageInput");
       const imagePreview = document.getElementById("imagePreview");
+      const messageInput = document.getElementById("messageInput");
       let base64Image = null;
+
+      // Add event listener for Enter key
+      messageInput.addEventListener("keypress", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          sendMessage();
+        }
+      });
 
       imageInput.addEventListener("change", function (e) {
         const file = e.target.files[0];
@@ -91,7 +100,6 @@
       });
 
       async function sendMessage() {
-        const messageInput = document.getElementById("messageInput");
         const responseDiv = document.getElementById("response");
         const message = messageInput.value;
 
