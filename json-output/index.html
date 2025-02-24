@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Victory Sign Detector</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        text-align: center;
+      }
+      #video,
+      #canvas {
+        width: 640px;
+        height: 480px;
+        margin: 10px;
+        border: 1px solid #ccc;
+      }
+      #results {
+        margin: 20px;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+      }
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        margin: 10px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Victory Sign Detector</h1>
+    <video id="video" autoplay></video>
+    <canvas id="canvas" style="display: none"></canvas>
+    <br />
+    <button id="startStop">Start Auto-Capture</button>
+    <div id="results">Results will appear here...</div>
+
+    <script>
+      // Get access to the webcam
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const startStopButton = document.getElementById("startStop");
+      const results = document.getElementById("results");
+      let isRunning = false;
+      let intervalId = null;
+
+      navigator.mediaDevices
+        .getUserMedia({ video: true })
+        .then((stream) => {
+          video.srcObject = stream;
+        })
+        .catch((err) => {
+          console.error("Error accessing webcam:", err);
+        });
+
+      // Function to capture and analyze image
+      async function captureAndAnalyze() {
+        // Draw video frame to canvas
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+
+        // Convert canvas to base64 image
+        const imageData = canvas.toDataURL("image/jpeg").split(",")[1];
+
+        // Show loading state
+        results.textContent = "Analyzing...";
+
+        try {
+          const response = await fetch(
+            "http://172.20.3.254:1234/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "llava-v1.5-7b",
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are an image analyzer that detects people and victory signs in images.",
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "text",
+                        text: "Analyze this image and tell me if there is a person and if they are making a victory/peace sign.",
+                      },
+                      {
+                        type: "image_url",
+                        image_url: {
+                          url: `data:image/jpeg;base64,${imageData}`,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                response_format: {
+                  type: "json_schema",
+                  json_schema: {
+                    name: "image_analysis",
+                    strict: "true",
+                    schema: {
+                      type: "object",
+                      properties: {
+                        isPerson: {
+                          type: "boolean",
+                          description:
+                            "True if a person is detected in the image",
+                        },
+                        isVictorySign: {
+                          type: "boolean",
+                          description:
+                            "True if a victory/peace sign gesture is detected",
+                        },
+                        description: {
+                          type: "string",
+                          description:
+                            "A brief description of what is seen in the image",
+                        },
+                      },
+                      required: ["isPerson", "isVictorySign", "description"],
+                    },
+                  },
+                },
+                temperature: 0.7,
+                max_tokens: 50,
+              }),
+            }
+          );
+
+          const data = await response.json();
+
+          // Display results
+          const analysis = JSON.parse(data.choices[0].message.content);
+          results.innerHTML = `
+                    Person detected: ${analysis.isPerson ? "✅" : "❌"}<br>
+                    Victory sign detected: ${
+                      analysis.isVictorySign ? "✅" : "❌"
+                    }<br>
+                    Description: ${analysis.description}<br>
+                    Last update: ${new Date().toLocaleTimeString()}
+                `;
+        } catch (error) {
+          console.error("Error:", error);
+          results.textContent = "Error analyzing image. Will retry...";
+        }
+      }
+
+      // Toggle auto-capture
+      startStopButton.addEventListener("click", () => {
+        if (!isRunning) {
+          // Start capturing
+          isRunning = true;
+          startStopButton.textContent = "Stop Auto-Capture";
+          startStopButton.style.backgroundColor = "#f44336";
+
+          // Initial capture
+          captureAndAnalyze();
+
+          // Set up interval for subsequent captures
+          intervalId = setInterval(captureAndAnalyze, 10000);
+        } else {
+          // Stop capturing
+          isRunning = false;
+          startStopButton.textContent = "Start Auto-Capture";
+          startStopButton.style.backgroundColor = "#4CAF50";
+          if (intervalId) {
+            clearInterval(intervalId);
+          }
+        }
+      });
+    </script>
+  </body>
+</html>
