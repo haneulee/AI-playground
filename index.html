@@ -58,6 +58,13 @@
     <h1>LLaVA Chat Interface</h1>
     <div class="chat-container">
       <div>
+        <button id="startCamera">Start Camera</button>
+        <button id="captureImage" style="display: none">Capture Image</button>
+        <video
+          id="videoElement"
+          style="display: none; max-width: 300px; margin: 10px 0"
+        ></video>
+        <canvas id="canvas" style="display: none"></canvas>
         <input type="file" id="imageInput" accept="image/*" />
         <img id="imagePreview" />
       </div>
@@ -76,7 +83,54 @@
       const imageInput = document.getElementById("imageInput");
       const imagePreview = document.getElementById("imagePreview");
       const messageInput = document.getElementById("messageInput");
+      const videoElement = document.getElementById("videoElement");
+      const canvas = document.getElementById("canvas");
+      const startCameraButton = document.getElementById("startCamera");
+      const captureButton = document.getElementById("captureImage");
       let base64Image = null;
+      let stream = null;
+
+      // Camera handling
+      startCameraButton.addEventListener("click", async () => {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          videoElement.srcObject = stream;
+          videoElement.style.display = "block";
+          captureButton.style.display = "inline-block";
+          startCameraButton.textContent = "Stop Camera";
+
+          // Start playing the video
+          await videoElement.play();
+        } catch (err) {
+          console.error("Error accessing camera:", err);
+          alert(
+            "Error accessing camera. Please make sure you have granted camera permissions."
+          );
+        }
+      });
+
+      captureButton.addEventListener("click", () => {
+        // Set canvas dimensions to match video
+        canvas.width = videoElement.videoWidth;
+        canvas.height = videoElement.videoHeight;
+
+        // Draw current video frame to canvas
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+        // Convert canvas to base64 image
+        base64Image = canvas.toDataURL("image/jpeg");
+        imagePreview.src = base64Image;
+        imagePreview.style.display = "block";
+
+        // Stop the camera
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          videoElement.style.display = "none";
+          captureButton.style.display = "none";
+          startCameraButton.textContent = "Start Camera";
+        }
+      });
 
       // Add event listener for Enter key
       messageInput.addEventListener("keypress", function (event) {
