@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Face Detection Video Player</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background-color: #000;
+        color: white;
+        font-family: Arial, sans-serif;
+      }
+      .container {
+        position: relative;
+        width: 100%;
+        max-width: 1200px;
+      }
+      #mainVideo {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+      #webcam {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 320px;
+        height: 240px;
+        border: 2px solid white;
+        border-radius: 8px;
+      }
+      #status {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        padding: 10px;
+        background-color: rgba(0, 0, 0, 0.7);
+        border-radius: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <video id="mainVideo" src="test.mov"></video>
+      <video id="webcam" autoplay playsinline></video>
+      <div id="status">Face detection: initializing...</div>
+    </div>
+
+    <script type="module">
+      import {
+        FaceDetector,
+        FilesetResolver,
+      } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+      const mainVideo = document.getElementById("mainVideo");
+      const webcam = document.getElementById("webcam");
+      const status = document.getElementById("status");
+
+      let faceDetector;
+      let lastVideoTime = -1;
+
+      // Initialize face detector
+      async function initializeFaceDetector() {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        );
+        faceDetector = await FaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+            delegate: "GPU",
+          },
+          runningMode: "VIDEO",
+        });
+        startWebcam();
+      }
+
+      // Start webcam
+      async function startWebcam() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+          });
+          webcam.srcObject = stream;
+          webcam.addEventListener("loadeddata", () => {
+            mainVideo.play();
+            detectFaces();
+          });
+        } catch (error) {
+          console.error("Error accessing webcam:", error);
+          status.textContent = "Error: Cannot access webcam";
+        }
+      }
+
+      // Continuous face detection
+      async function detectFaces() {
+        if (webcam.currentTime !== lastVideoTime) {
+          lastVideoTime = webcam.currentTime;
+          if (faceDetector) {
+            const startTimeMs = performance.now();
+            const results = faceDetector.detectForVideo(webcam, startTimeMs);
+
+            if (results.detections.length > 0) {
+              // Face detected - pause video
+              mainVideo.pause();
+              status.textContent = "Face detected - Video paused";
+              status.style.backgroundColor = "rgba(0, 255, 0, 0.7)";
+            } else {
+              // No face - play video
+              mainVideo.play();
+              status.textContent = "No face detected - Video playing";
+              status.style.backgroundColor = "rgba(255, 0, 0, 0.7)";
+            }
+          }
+        }
+        requestAnimationFrame(detectFaces);
+      }
+
+      // Initialize everything when page loads
+      window.onload = () => {
+        initializeFaceDetector();
+      };
+    </script>
+  </body>
+</html>
