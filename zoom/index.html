@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Auto Zoom Camera</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: Arial, sans-serif;
+        background-color: #1a1a1a;
+        color: white;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        text-align: center;
+      }
+
+      .video-container {
+        position: relative;
+        width: 100%;
+        max-width: 800px;
+        margin: 20px auto;
+        overflow: hidden;
+        background-color: #2a2a2a;
+        border-radius: 10px;
+      }
+
+      #videoElement {
+        width: 100%;
+        transform-origin: center;
+        transition: transform 0.5s ease;
+      }
+
+      #canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .controls {
+        margin: 20px 0;
+        padding: 20px;
+        background-color: #2a2a2a;
+        border-radius: 10px;
+      }
+
+      button {
+        padding: 12px 24px;
+        margin: 0 10px;
+        border: none;
+        border-radius: 5px;
+        background-color: #4caf50;
+        color: white;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        background-color: #666;
+        cursor: not-allowed;
+      }
+
+      .status {
+        margin: 10px 0;
+        padding: 10px;
+        border-radius: 5px;
+        background-color: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Auto Zoom Camera</h1>
+
+      <div class="video-container">
+        <video id="videoElement" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <div class="controls">
+        <button id="startButton">Start Camera</button>
+        <button id="resetButton" disabled>Reset Zoom</button>
+        <div class="status">
+          Status: <span id="statusText">Waiting to start</span>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const video = document.getElementById("videoElement");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const startButton = document.getElementById("startButton");
+      const resetButton = document.getElementById("resetButton");
+      const statusText = document.getElementById("statusText");
+
+      let currentZoom = 1;
+      let stream = null;
+      let model = null;
+      let isDetecting = false;
+      let animationId = null;
+
+      // 모델 로드
+      async function loadModel() {
+        statusText.textContent = "Loading object detection model...";
+        model = await cocoSsd.load();
+        statusText.textContent = "Model loaded";
+      }
+
+      // 카메라 시작
+      startButton.addEventListener("click", async () => {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+          });
+          video.srcObject = stream;
+          startButton.disabled = true;
+          resetButton.disabled = false;
+
+          // 비디오 크기 설정
+          video.onloadedmetadata = () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            if (!model) {
+              loadModel().then(() => {
+                startDetection();
+              });
+            } else {
+              startDetection();
+            }
+          };
+        } catch (err) {
+          console.error("Error accessing camera:", err);
+          statusText.textContent = "Error accessing camera: " + err.message;
+        }
+      });
+
+      // 객체 감지 및 줌
+      async function detectObjects() {
+        if (!isDetecting) return;
+
+        try {
+          const predictions = await model.detect(video);
+
+          // 캔버스 초기화
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // 피규어와 관심있는 객체 필터링 (사람 제외)
+          const relevantObjects = predictions.filter(
+            (pred) =>
+              pred.class === "teddy bear" ||
+              pred.class === "toy" ||
+              pred.class === "sports ball" ||
+              pred.class === "clock" ||
+              pred.class === "vase" ||
+              pred.class === "bottle" ||
+              pred.class === "cup" ||
+              pred.class === "doll" || // 일부 인형류
+              pred.class === "sculpture" ||
+              pred.score > 0.5 // 신뢰도가 50% 이상인 객체만 감지
+          );
+
+          if (relevantObjects.length > 0) {
+            // 가장 큰 객체 찾기
+            const largestObject = relevantObjects.reduce((prev, current) => {
+              const prevArea = prev.bbox[2] * prev.bbox[3];
+              const currentArea = current.bbox[2] * current.bbox[3];
+              return currentArea > prevArea ? current : prev;
+            });
+
+            // 객체 크기에 따른 줌 레벨 계산
+            const objectArea =
+              (largestObject.bbox[2] * largestObject.bbox[3]) /
+              (canvas.width * canvas.height);
+            const targetZoom = Math.min(Math.max(1 / objectArea, 1), 3);
+
+            // 천천히 줌인
+            currentZoom += (targetZoom - currentZoom) * 0.03;
+            video.style.transform = `scale(${currentZoom})`;
+
+            // 바운딩 박스 그리기 (객체별로 다른 색상)
+            let boxColor;
+            switch (largestObject.class) {
+              case "teddy bear":
+              case "toy":
+              case "doll":
+                boxColor = "#FF6B6B"; // 빨간색 계열
+                break;
+              default:
+                boxColor = "#4B89DC"; // 파란색 계열
+            }
+
+            // 바운딩 박스 그리기
+            ctx.strokeStyle = boxColor;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(
+              largestObject.bbox[0],
+              largestObject.bbox[1],
+              largestObject.bbox[2],
+              largestObject.bbox[3]
+            );
+
+            // 객체 라벨 표시
+            ctx.fillStyle = boxColor;
+            ctx.font = "16px Arial";
+            const label = `${largestObject.class} (${Math.round(
+              largestObject.score * 100
+            )}%)`;
+            ctx.fillText(
+              label,
+              largestObject.bbox[0],
+              largestObject.bbox[1] > 20
+                ? largestObject.bbox[1] - 5
+                : largestObject.bbox[1] + 20
+            );
+
+            statusText.textContent = `Detected: ${
+              largestObject.class
+            } (${Math.round(largestObject.score * 100)}%)`;
+          } else {
+            // 객체가 없을 때는 기존 속도로 줌아웃
+            currentZoom += (1 - currentZoom) * 0.2;
+            video.style.transform = `scale(${currentZoom})`;
+            statusText.textContent =
+              "No relevant objects detected - Zooming out";
+          }
+
+          // 현재 줌 레벨이 1에 매우 가까우면 정확히 1로 설정
+          if (Math.abs(currentZoom - 1) < 0.01) {
+            currentZoom = 1;
+            video.style.transform = `scale(1)`;
+          }
+        } catch (error) {
+          console.error("Detection error:", error);
+          statusText.textContent = "Detection error: " + error.message;
+        }
+
+        animationId = requestAnimationFrame(detectObjects);
+      }
+
+      function startDetection() {
+        isDetecting = true;
+        detectObjects();
+        statusText.textContent = "Detection started";
+      }
+
+      // 리셋 버튼
+      resetButton.addEventListener("click", () => {
+        currentZoom = 1;
+        video.style.transform = "scale(1)";
+        statusText.textContent = "Zoom reset";
+      });
+
+      // 페이지 종료 시 정리
+      window.onbeforeunload = () => {
+        isDetecting = false;
+        if (animationId) {
+          cancelAnimationFrame(animationId);
+        }
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      };
+    </script>
+  </body>
+</html>

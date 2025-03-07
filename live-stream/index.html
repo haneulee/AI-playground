@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Live Camera Stream</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: Arial, sans-serif;
+        background-color: #1a1a1a;
+        color: white;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        text-align: center;
+      }
+
+      video {
+        width: 100%;
+        max-width: 640px;
+        margin: 10px auto;
+        border-radius: 10px;
+        background-color: #2a2a2a;
+      }
+
+      .controls {
+        margin: 20px 0;
+      }
+
+      button {
+        padding: 10px 20px;
+        margin: 0 10px;
+        border: none;
+        border-radius: 5px;
+        background-color: #4caf50;
+        color: white;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        background-color: #666;
+        cursor: not-allowed;
+      }
+
+      #status {
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 5px;
+        background-color: #333;
+      }
+
+      .room-input {
+        padding: 10px;
+        margin: 10px;
+        border: none;
+        border-radius: 5px;
+        background-color: #333;
+        color: white;
+        font-size: 16px;
+      }
+
+      .room-selection {
+        margin: 20px 0;
+        padding: 20px;
+        background-color: #2a2a2a;
+        border-radius: 10px;
+      }
+
+      .join-button {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        background-color: #2196f3;
+        color: white;
+        cursor: pointer;
+      }
+
+      .join-button:hover {
+        background-color: #1976d2;
+      }
+
+      .create-room-button {
+        background-color: #4caf50;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Live Camera Stream</h1>
+
+      <div class="room-selection">
+        <h2>Join or Create Room</h2>
+        <div>
+          <input
+            type="text"
+            id="roomInput"
+            class="room-input"
+            placeholder="Enter Room ID"
+          />
+          <button id="joinButton" class="join-button">Join Room</button>
+        </div>
+        <div style="margin-top: 10px">
+          <button id="createButton" class="join-button create-room-button">
+            Create New Room
+          </button>
+        </div>
+      </div>
+
+      <div id="roomId"></div>
+      <div id="status">Initializing...</div>
+
+      <div class="controls">
+        <button id="startButton" disabled>Start Streaming</button>
+        <button id="stopButton" disabled>Stop Streaming</button>
+      </div>
+
+      <video id="localVideo" autoplay playsinline muted></video>
+      <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    <script>
+      const configuration = {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      };
+
+      let peerConnection;
+      let localStream;
+      let currentRoom = null;
+
+      const localVideo = document.getElementById("localVideo");
+      const remoteVideo = document.getElementById("remoteVideo");
+      const startButton = document.getElementById("startButton");
+      const stopButton = document.getElementById("stopButton");
+      const status = document.getElementById("status");
+      const roomIdDisplay = document.getElementById("roomId");
+      const roomInput = document.getElementById("roomInput");
+      const joinButton = document.getElementById("joinButton");
+      const createButton = document.getElementById("createButton");
+
+      let ws;
+      let wsRetryCount = 0;
+      const MAX_RETRY_COUNT = 5;
+      const RETRY_INTERVAL = 3000; // 3초
+
+      function connectWebSocket() {
+        try {
+          // IP 주소 직접 사용
+          const wsUrl = `wss://localhost:9443`; // 개발 테스트용
+          // const wsUrl = `wss://${window.location.hostname}:9443`;  // 실제 배포용
+          console.log("Attempting to connect to:", wsUrl);
+
+          ws = new WebSocket(wsUrl);
+
+          ws.onopen = () => {
+            console.log("WebSocket connected successfully");
+            status.textContent = "Connected to server";
+            joinButton.disabled = false;
+            createButton.disabled = false;
+          };
+
+          ws.onclose = (e) => {
+            console.log("WebSocket connection closed:", e);
+            status.textContent = "Connection closed. Please refresh the page.";
+            startButton.disabled = true;
+            joinButton.disabled = true;
+            createButton.disabled = true;
+          };
+
+          ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+            status.textContent = "Connection error. Please check console.";
+          };
+
+          ws.onmessage = async (event) => {
+            const message = JSON.parse(event.data);
+
+            switch (message.type) {
+              case "room_joined":
+                status.textContent = `Joined room: ${message.room}`;
+                startButton.disabled = false;
+                break;
+              case "offer":
+                await handleOffer(message);
+                break;
+              case "answer":
+                await handleAnswer(message);
+                break;
+              case "candidate":
+                await handleCandidate(message);
+                break;
+              case "ready":
+                if (localStream) {
+                  makeOffer();
+                }
+                break;
+              case "error":
+                status.textContent = `Error: ${message.message}`;
+                break;
+            }
+          };
+        } catch (error) {
+          console.error("Failed to create WebSocket:", error);
+          status.textContent = "Failed to create connection";
+        }
+      }
+
+      // 안전한 메시지 전송 함수
+      function safeSendMessage(message) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(message));
+        } else {
+          console.warn(
+            "WebSocket is not connected. Message not sent:",
+            message
+          );
+          status.textContent = "Connection lost. Trying to reconnect...";
+          connectWebSocket();
+        }
+      }
+
+      function joinRoom(roomId) {
+        currentRoom = roomId;
+        roomIdDisplay.textContent = `Room ID: ${roomId}`;
+        safeSendMessage({
+          type: "join",
+          room: roomId,
+        });
+      }
+
+      createButton.addEventListener("click", () => {
+        const newRoomId = Math.random().toString(36).substring(7);
+        joinRoom(newRoomId);
+        roomInput.value = newRoomId;
+      });
+
+      joinButton.addEventListener("click", () => {
+        const roomId = roomInput.value.trim();
+        if (roomId) {
+          joinRoom(roomId);
+        } else {
+          status.textContent = "Please enter a room ID";
+        }
+      });
+
+      async function startStream() {
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: "environment",
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+          });
+          localVideo.srcObject = localStream;
+
+          createPeerConnection();
+
+          startButton.disabled = true;
+          stopButton.disabled = false;
+          status.textContent = "Streaming...";
+        } catch (err) {
+          status.textContent = "Error accessing camera: " + err.message;
+        }
+      }
+
+      function stopStream() {
+        if (localStream) {
+          localStream.getTracks().forEach((track) => track.stop());
+        }
+        if (peerConnection) {
+          peerConnection.close();
+        }
+        localVideo.srcObject = null;
+        remoteVideo.srcObject = null;
+        startButton.disabled = false;
+        stopButton.disabled = true;
+        status.textContent = "Stream stopped";
+      }
+
+      function createPeerConnection() {
+        peerConnection = new RTCPeerConnection(configuration);
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            safeSendMessage({
+              type: "candidate",
+              candidate: event.candidate,
+              room: currentRoom,
+            });
+          }
+        };
+
+        peerConnection.ontrack = (event) => {
+          remoteVideo.srcObject = event.streams[0];
+        };
+
+        localStream.getTracks().forEach((track) => {
+          peerConnection.addTrack(track, localStream);
+        });
+      }
+
+      async function makeOffer() {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        safeSendMessage({
+          type: "offer",
+          offer: offer,
+          room: currentRoom,
+        });
+      }
+
+      async function handleOffer(message) {
+        if (!peerConnection) {
+          createPeerConnection();
+        }
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(message.offer)
+        );
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        safeSendMessage({
+          type: "answer",
+          answer: answer,
+          room: currentRoom,
+        });
+      }
+
+      async function handleAnswer(message) {
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(message.answer)
+        );
+      }
+
+      async function handleCandidate(message) {
+        if (message.candidate) {
+          try {
+            await peerConnection.addIceCandidate(
+              new RTCIceCandidate(message.candidate)
+            );
+          } catch (e) {
+            console.error("Error adding ice candidate:", e);
+          }
+        }
+      }
+
+      startButton.addEventListener("click", startStream);
+      stopButton.addEventListener("click", stopStream);
+
+      // 페이지 로드 시 WebSocket 연결 시작
+      connectWebSocket();
+
+      // 페이지 종료 시 정리
+      window.onbeforeunload = () => {
+        stopStream();
+        if (ws) {
+          ws.close();
+        }
+      };
+    </script>
+  </body>
+</html>
